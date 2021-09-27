@@ -1,0 +1,394 @@
+---
+title: "Identification and quantification of chimeric sequencing reads in a highly multiplexed RAD-seq protocol"
+output:
+  html_document: default
+  pdf_document: default
+---
+Maria Luisa Martin Cerezo 1,2, Rohan Raval 1, Bernardo de Haro Reyes 1, Marek Kucka 3,Frank Yinguang Chan 3 and Jarosław Bryk 1
+
+1-Department of Biology, School of Applied Sciences, University of Huddersfield, Queensgate,Huddersfield, England, United Kingdom 
+
+2-AVIAN Behavioural Genomics and Physiology, IFM Biology (IFM), Linköping University,Linköping, Sweden 
+
+3-Friedrich Meschier Laboratory of the Max Planck Society, Tübingen, Germany 
+
+mlmcerezo@gmail.com, j.bryk@hud.ac.uk
+
+
+
+## Loading required packages 
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(here)
+library(ggpubr)
+library(plotly)
+library(ggpubr)
+library(reshape2)
+library(ggplot2)
+library(FSA)
+library(car)
+library(here)
+
+```
+
+## Input data
+The table containing the input data includes the combinations of inner barcodes, the id of the chimera formed by those barcodes, the sequencing plate, the number of mismatches allowed while demultiplexing, the multiplexing group, that it is determined by the combination of outer barcodes, the type of chimera, the number of reads, the description of that barcode combination (chimera or sample) and the protocol followed to prepare the library (Type Seq or Type Seq+PCR)
+```{r message=FALSE, warning=FALSE}
+chimeras<-read.csv("Chimeras.txt", sep = "\t")
+head(chimeras)
+
+```
+As a sanity ccheck, here we calculated the number of samples included in each plate as well as the total number of samples
+```{r message=FALSE, warning=FALSE}
+number_of_samples<-chimeras %>% 
+group_by(Plate, Multiplexing_group,Mismatches,Description) %>% 
+filter(Description == "sample")  %>% 
+filter(Mismatches =="0m")
+table(number_of_samples$Plate)
+sum(table(number_of_samples$Plate))
+```
+
+
+
+## 3.1.Multiplexing PCR increase the proportion of sequences with chimeric adapters
+Here, we calculated the ratio of chimeras for each Multiplexing group. We will have one average value per multiplexing group and for each number of mismatches. We are using column description that differentiate genuine samples from chimeric sequences
+
+```{r message=FALSE, warning=FALSE}
+
+chimeras_percentage<-chimeras %>% 
+group_by(Plate, Multiplexing_group,Mismatches,Description) %>% 
+summarise(sum_counts = sum(Reads)) %>% 
+mutate(Total = sum(sum_counts)) %>% 
+mutate(Ratio = round((sum_counts)/(Total), digits = 4))%>%
+mutate(Percentage=100*(Ratio))%>% 
+filter(Description == "chimera")
+
+chimeras_percentage$Mismatches<-as.factor(chimeras_percentage$Mismatches)
+                                                   
+head(chimeras_percentage)
+```
+
+Here, we have generated an extra column indicating to which experiment each plate belongs to. This colunm existed in the input file but has been lost while generating the percentages. In experiment Type A PCR reactions were performed in each samples individually while in experiment Type B PCR reactions were performed in multipelxed groups of samples. Afterwards we are plotting the number of chimeras identified in each multiplexing group per experiment Type and also per number of mismatches allowed for barcode rescue.
+
+```{r message=FALSE, warning=FALSE}
+###Percentage of total chimeras per library type
+
+chimeras_percentage$Plate_type<-c(rep("Type A", 200),rep("Type B", 175))
+
+chimeras_percentage_graph_type <- ggplot(chimeras_percentage) +
+  scale_fill_grey(start = 0.9, end = 0)+
+  geom_boxplot(aes(x=chimeras_percentage$Mismatches, y=chimeras_percentage$Percentage,
+              fill=chimeras_percentage$Plate_type),outlier.colour="black", 
+               outlier.shape=16,
+               outlier.size=2, notch=FALSE)+
+  theme_bw()+
+  xlab("Number of mismatches")+ ylab("Percentage")+labs(fill = "Libraries")+
+  ggtitle("Percentage chimeras per library type")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+chimeras_percentage_graph_type
+
+#For median, max and min values check the graph using ggplotly
+#ggplotly(chimeras_percentage_graph_type)
+ggsave("Figure_4_inner_chimeras_type.pdf",width = 15,height=10, units = "cm") 
+```
+
+Here we have calculated the percentage of genuine reads and chimeric reads per experiment and per number of mismatches allowed for barcode rescue. TI_Results_summary includes results for experiment Type A while TII_Results_summary includes results for experiment Type B.
+```{r message=FALSE, warning=FALSE}
+##Get percentages of chimeras per type
+#get number of cases of each type of chimera
+TI<-chimeras[chimeras$Plate_type=="Type_A",]
+#Percentage of chimeric sequences and genuine sequences per plate and multiplexing group 
+#for each number of mismatches
+TI_Results= TI %>% group_by( Mismatches,Plate, Multiplexing_group, Description) %>%   
+  mutate(Total = sum(as.numeric(Reads)))  %>% 
+  summarize(Total = sum(Reads, na.rm = TRUE), Stdev=sd(Reads,na.rm = TRUE )) %>%
+  mutate(Perc = 100*(as.numeric(Total)/sum(as.numeric(Total))))
+#Summary statistics : median, stdev, mean, maximum and minimum percentage of chimeric and 
+#genuine sequences per multiplexing group
+TI_Results_summary = TI_Results%>% group_by(Mismatches,Description)%>%
+  select(Mismatches, Description, Perc)%>%
+  summarize(Median = median(Perc, na.rm = TRUE), Stdev=sd(Perc,na.rm = TRUE), 
+            Mean = mean(Perc, na.rm = TRUE),Max=max(Perc), Min=min(Perc))
+knitr::kable(TI_Results_summary[,])
+#Percentage of chimeric sequences and genuine sequences per plate and number of mismatches
+TI_Results_Plate<-TI %>% group_by(Plate,Mismatches) %>%
+  select(Reads,Mismatches, Description, Plate)%>%
+  mutate(Total = sum(as.numeric(Reads))) %>% 
+  group_by(Plate,Mismatches, Description) %>%
+  select(Mismatches,Description,Reads,Total,Plate)%>%
+  summarize(Total = sum(Reads, na.rm = TRUE), Stdev=sd(Reads,na.rm = TRUE )) %>%
+  mutate(Percentage = 100*(as.numeric(Total)/sum(as.numeric(Total))))
+
+TII<-chimeras[chimeras$Plate_type=="Type_B",]
+#Percentage of chimeric sequences and genuine sequences per plate and multiplexing group 
+#for each number of mismatches
+TII_Results= TII %>% group_by( Mismatches,Plate, Multiplexing_group, Description) %>%   
+  mutate(Total = sum(as.numeric(Reads)))  %>% 
+  summarize(Total = sum(Reads, na.rm = TRUE), Stdev=sd(Reads,na.rm = TRUE )) %>%
+  mutate(Perc = 100*(as.numeric(Total)/sum(as.numeric(Total))))
+
+#Summary statistics  median, stdev, mean, maximum and minimum percentage of chimeric and 
+#genuine sequences per multiplexing group
+TII_Results_summary = TII_Results%>% group_by(Mismatches,Description)%>%
+  select(Mismatches, Description, Perc)%>%
+  summarize(Median = median(Perc, na.rm = TRUE), Stdev=sd(Perc,na.rm = TRUE), 
+            Mean = mean(Perc, na.rm = TRUE),Max=max(Perc), Min=min(Perc))
+knitr::kable(TII_Results_summary[,])
+
+#Percentage of chimeric sequences and genuine sequences per plate and number of mismatches
+TII_Results_Plate<-TII %>% group_by(Plate,Mismatches) %>%
+  select(Reads,Mismatches, Description, Plate)%>%
+  mutate(Total = sum(as.numeric(Reads))) %>% 
+  group_by(Plate,Mismatches, Description) %>%
+  select(Mismatches,Description,Reads,Total,Plate)%>%
+  summarize(Total = sum(Reads, na.rm = TRUE), Stdev=sd(Reads,na.rm = TRUE )) %>%
+  mutate(Percentage = 100*(as.numeric(Total)/sum(as.numeric(Total))))
+```
+
+## Differences are mainly find between different library types, not be-tween libraries from the same type
+Here we are plotting the percentage of chimeras found for each number of mismatches allowed for barcode resuce and per plate. This graph helps us to see that differences are mainly found between experiment types, not between libraries from the same type. Statistical results can be found in Script 02_Statistics_chimeras.Rmd
+```{r message=FALSE, warning=FALSE}
+###Percentage of total chimeras per Plate
+chimeras_percentage_graph <- ggplot(chimeras_percentage) +
+  scale_fill_grey(start = 1, end = 0)+
+  geom_boxplot(aes(x=Plate, y=Percentage, fill=Mismatches),outlier.colour="black", 
+               outlier.shape=16,
+               outlier.size=1, notch=FALSE)+
+  theme_bw()+
+  xlab("Library")+ ylab("Percentage")+labs(fill = "Number of mismatches")+
+  ggtitle("Percentage of chimeras per library")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(breaks = seq(0, 25, 5),
+                    minor_breaks = seq(0, 25, 1))+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))+
+  scale_fill_grey(start = 1, end = 0, na.value = "red", aesthetics = "fill")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  scale_x_discrete(labels=c("Type A-1", "Type A-2","Type A-3","Type A-4","Type B-1","Type B-2","Type B-3"))
+
+chimeras_percentage_graph
+#ggplotly(chimeras_percentage_graph)
+ggsave("Figure_5_total_chimeras_library.pdf",width = 20,  units = "cm") 
+```
+
+
+
+## 3.4. Types of chimeric combinations of adapters
+Now we want to analyse the differences between the 4 types of chimeras identified in our dataset. This information is saved in column Type. We are interested in analyzing the percentage of each type of chimeras relative to the total number of chimeras.Therefore, we are going to removing the reads belonging to genuine samples.
+
+First we are going to plot the total percentages of chimeras, from each Type identified per experiment. The values used are the percentage of each type of chimera per multiplexing group, summarized per experiment type.
+
+```{r message=FALSE, warning=FALSE}
+#Average:
+chimeras_percentage2<-chimeras %>% group_by(Plate, Multiplexing_group,Mismatches,Type) %>% 
+summarise(sum_counts = sum(Reads)) %>% 
+mutate(Total = sum(sum_counts)) %>% 
+mutate(Ratio = round((sum_counts)/(Total), digits = 4))%>%
+mutate(Percentage=100*(Ratio))
+
+chimeras_percentage2$Experiment<- c(rep("Type A", 500), rep("Type B",473))
+chimeras_percentage2_plot<-chimeras_percentage2 %>% filter(Type != "sample")%>% group_by(Type, Experiment)
+ggplot(chimeras_percentage2_plot, aes(y=Percentage, x=Type, fill=Experiment))+
+  geom_boxplot()+scale_fill_grey(start = 1, end = 0)+theme_bw()+xlab("Chimeras type")
+ggsave("Figure_8_chimeras_type_percentage_total.pdf",width = 15,height=10, units = "cm") 
+
+```
+
+Now we will keep information for each possible combination of barcodes leading to a chimeric sequence, so we can compare the relative abundance of each type of chimeras independently of the number of cases where these chimeras can be identified
+```{r message=FALSE, warning=FALSE}
+chimeras_indv<-chimeras %>% group_by(Plate, Mismatches) %>% mutate(ratio = Reads/sum(Reads)) 
+chimeras_indv$Percentage<- 100*(chimeras_indv$ratio)
+chimeras_indv<-chimeras_indv[chimeras_indv$Description != "sample", ]
+head(chimeras)
+
+```
+Results are plotted in two graphs, one for experiment type A and one for experiment type B
+```{r message=FALSE, warning=FALSE}
+######Division between non existant combinations of sequencing chimeras and existant combinations
+M<-chimeras_indv[chimeras_indv$Plate_type=="Type_A",]
+R<-chimeras_indv[chimeras_indv$Plate_type=="Type_B",]
+par(mfrow=c(2,1))
+
+R_chimeras_percentage_graph <- ggplot(R) +
+  scale_fill_grey(start = 1, end = 0)+
+  geom_boxplot(aes(x=R$Mismatches, y=R$Percentage, fill=R$Type), outlier.colour="red", 
+               outlier.shape=NA,
+               outlier.size=2, notch=FALSE)+
+  theme_bw()+
+  xlab("")+ 
+  ylab("")+labs(fill = "Type of chimeras")+xlab("Type B")+
+  #ggtitle("Percentage of total chimeras")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0, 0.02),breaks = seq(0, 0.03, 0.01),
+                   minor_breaks = seq(0,0.02, 0.001))+
+  theme(axis.text.x = element_text(size = 15),
+        axis.text.y = element_text(size = 15),  
+        axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15))+ theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 15)
+  )
+
+M_chimeras_percentage_graph <- ggplot(M) +
+  scale_fill_grey(start = 1, end = 0)+
+  geom_boxplot(aes(x=M$Mismatches, y=M$Percentage, fill=M$Type), outlier.colour="red", 
+               outlier.shape=NA,
+               outlier.size=2, notch=FALSE)+
+  theme_bw()+
+  xlab("")+ 
+  ylab("Percentage")+labs(fill = "Type of chimeras")+xlab("Type A")+
+  #ggtitle("Percentage of total chimeras")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0, 0.02),breaks = seq(0, 0.03, 0.01),
+                    minor_breaks = seq(0,0.02, 0.001))+
+  theme(axis.text.x = element_text(size = 15),
+        axis.text.y = element_text(size = 15),  
+        axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15))+ theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 15)
+  )
+
+
+ggarrange(M_chimeras_percentage_graph, R_chimeras_percentage_graph, 
+          labels=c("A", "B"),
+          ncol = 2, nrow = 1,  align = "hv",
+          common.legend = TRUE)
+ggsave("Figure_9_outer_chimeras.pdf",width = 25,  units = "cm") 
+```
+Now, we are going to summarise our results into tables, to show the percentage of chimeras respect to the total.
+chimeras_percentage_plate_type table will gave us the percentage of each type of chimeras and genuine sequences per plate and per number of mismatches allowed for barcode rescue
+```{r message=FALSE, warning=FALSE}
+chimeras_percentage_plate_type<-chimeras %>% group_by(Plate_type,Plate,Mismatches,Type) %>% 
+summarise(sum_counts = sum(Reads)) %>% 
+mutate(Total = sum(sum_counts)) %>% 
+mutate(Ratio = round((sum_counts)/(Total), digits = 4))%>%
+mutate(Percentage=100*(Ratio))
+knitr::kable(chimeras_percentage_plate_type[,])
+
+```
+
+chimeras_percentage_plate table will gave us the total percentage of chimeras and genuine sequences per plate and per number of mismatches allowed for barcode rescue
+```{r message=FALSE, warning=FALSE}
+chimeras_percentage_plate<-chimeras %>% group_by(Plate,Mismatches, Plate_type,Description) %>% 
+summarise(sum_counts = sum(Reads)) %>% 
+mutate(Total = sum(sum_counts)) %>% 
+mutate(Ratio = round((sum_counts)/(Total), digits = 4))%>%
+mutate(Percentage=100*(Ratio))
+
+knitr::kable(chimeras_percentage_plate[,])
+
+```
+In order to calculate the Experiment percentages, we used the chimeras_percentage2 files, wich includes the percentages for each combination of barcodes leading to chimeras. This way the numbers obtained will be more precised
+
+
+```{r}
+chimeras_percentage_per_experiment_and_case=chimeras_percentage2 %>% group_by(Experiment, Type,Mismatches)%>%summarize(mean_percentage=mean(Percentage) )
+chimeras_percentage_per_experiment_and_case
+chimeras_percentage_per_experiment=chimeras_percentage2 %>% filter(Type != "sample")%>%group_by(Experiment, Plate,Multiplexing_group, Mismatches)%>%summarize(sum_percentage=sum(Percentage) )%>%group_by(Experiment, Plate, Mismatches)%>%summarize(mean_percentage=mean(sum_percentage) )%>%group_by(Experiment, Mismatches)%>%summarize(mean_percentage_exp=mean(mean_percentage) )
+
+chimeras_percentage_per_experiment
+```
+Here we get the percetage of each type of chimera relative to the total number of chimeras (reads from genuine samples have been excluded)
+```{r message=FALSE, warning=FALSE}
+#get number of cases for each type of chimera in each library preparation protocol (Percentage of each type of chimeras relative to the total number of chimeras)
+TI<-chimeras_indv[chimeras_indv$Plate_type=="Type_A",]
+TII<-chimeras_indv[chimeras_indv$Plate_type=="Type_B",]
+Table_TI<-as.data.frame(table(TI$Type))
+Table_TI$Percentage<-((Table_TI$Freq)/sum(Table_TI$Freq))*100
+
+Table_TII<-as.data.frame(table(TII$Type))
+Table_TII$Percentage<-((Table_TII$Freq)/sum(Table_TII$Freq))*100
+
+
+Table<-merge(Table_TI,Table_TII, by = "Var1")
+colnames(Table)<-c("Type","TypeI","Percentage_TypeI","TypeII","Percentage_TypeII")
+Table<-Table %>% remove_rownames %>% column_to_rownames(var="Type")
+Table<-Table[-c(1,3)]
+Table
+
+
+
+```
+
+
+
+# Expected and observed number of chimeras type IV 
+All the calculations will be done considering no mismatches for barcode rescue
+
+```{r}
+# Type A
+
+# Here we get the total number of reads for the plates belonging to experiment type Seq
+Total_number_type_seq<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type A",Type=="sample") %>% ungroup() %>% 
+summarise(sum(Total))
+Total_number_type_seq
+# Here we calculate the number of chimeras type IV for experiment type Seq
+Total_number_type_IV_type_seq<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type A",Type=="TypeIV") %>% ungroup() %>% 
+summarise(sum(sum_counts))
+Total_number_type_IV_type_seq
+#Here we get the total number of reads from the multiplexing groups containing chimeras type IV
+Total_reads_multiplexing_groups_type_IV_type_seq<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type A",Type=="TypeIV") %>% ungroup() %>% summarise(sum(Total))
+Total_reads_multiplexing_groups_type_IV_type_seq
+#Type IV
+Observed_proportion_TIV_seq<-(Total_number_type_IV_type_seq/Total_reads_multiplexing_groups_type_IV_type_seq)
+Expected_TIV_seq<-(((Total_number_type_IV_type_seq/Total_reads_multiplexing_groups_type_IV_type_seq)*360)/16)*Total_number_type_seq
+Expected_proportion_TIV_seq<-(Expected_TIV_seq/Total_number_type_seq)
+Observed_proportion_TIV_seq
+Expected_TIV_seq
+Expected_proportion_TIV_seq
+
+
+##Type B
+#Here we get the total number of reads for the plates belonging to experiment type Seq
+Total_number_type_seq_pcr<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type B",Type=="sample") %>% ungroup() %>% 
+summarise(sum(Total))
+Total_number_type_seq_pcr
+# Here we calculate the number of chimeras type IV for experiment type Seq+PCR
+Total_number_type_IV_type_seq_pcr<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type B",Type=="TypeIV") %>% ungroup() %>% 
+summarise(sum(sum_counts))
+Total_number_type_IV_type_seq_pcr
+#Here we get the total number of reads from the multiplexing groups containing chimeras type IV
+Total_reads_multiplexing_groups_type_IV_type_seq_pcr<-chimeras_percentage2 %>% filter(Mismatches == "0m", Experiment=="Type B",Type=="TypeIV") %>% ungroup() %>% summarise(sum(Total))
+Total_reads_multiplexing_groups_type_IV_type_seq_pcr
+#Type IV
+Observed_proportion_TIV_seq_pcr<-(Total_number_type_IV_type_seq_pcr/Total_reads_multiplexing_groups_type_IV_type_seq_pcr)
+Expected_TIV_seq_pcr<-(((Total_number_type_IV_type_seq_pcr/Total_reads_multiplexing_groups_type_IV_type_seq_pcr)*360)/20)*Total_number_type_seq_pcr
+Expected_proportion_TIV_seq_pcr<-(Expected_TIV_seq_pcr/Total_number_type_seq_pcr)
+Observed_proportion_TIV_seq_pcr
+Expected_TIV_seq_pcr
+Expected_proportion_TIV_seq_pcr
+```
+Now we want to get the percentage respect to the total of reads, not relative to the total of chimeras to compare the detected and undetected percentages of chimeras Type IV
+```{r}
+
+#Total reads
+Table_total_reads<-chimeras_percentage2%>%filter(Mismatches=="0m")%>%
+  filter(Type!="sample")%>%
+  group_by(Multiplexing_group, Plate) %>%
+  summarise(chimeras_multiplexing_group = sum(sum_counts)) %>% 
+  group_by(Plate)%>%
+  summarise(sum_plate = sum(chimeras_multiplexing_group))
+Table_total_reads$Experiment=c(rep("Type A", 4), rep("Type B", 3))
+Table_total_reads<-Table_total_reads%>%
+  group_by(Experiment)%>%
+  summarise(sum_experiment = sum(sum_plate)) 
+Table_total_reads
+Percentage_chimeras_detected_Type_A=(Table_total_reads$sum_experiment[1]/Total_number_type_seq)*100
+Percentage_chimeras_detected_Type_A
+Percentage_undetected_Type_A= (Expected_TIV_seq/Total_number_type_seq)*100
+Percentage_undetected_Type_A
+Total_percentage_chimeras_Type_A=(sum(Table_total_reads$sum_experiment[1]+Expected_TIV_seq)/Total_number_type_seq)*100
+Total_percentage_chimeras_Type_A
+
+Percentage_chimeras_detected_Type_B=(Table_total_reads$sum_experiment[2]/Total_number_type_seq_pcr)*100
+Percentage_chimeras_detected_Type_B
+Percentage_undetected_Type_B=(Expected_TIV_seq_pcr/Total_number_type_seq_pcr)*100
+Percentage_undetected_Type_B
+Total_percentage_chimeras_Type_B=(sum(Table_total_reads$sum_experiment[2]+Expected_TIV_seq_pcr)/Total_number_type_seq_pcr)*100
+Total_percentage_chimeras_Type_B
+```
+
