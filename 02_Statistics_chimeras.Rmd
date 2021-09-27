@@ -1,0 +1,398 @@
+---
+title: "Identification and quantification of chimeric sequencing reads in a highly multiplexed RAD-seq protocol"
+output:
+  pdf_document: default
+  html_document: default
+---
+Maria Luisa Martin Cerezo 1,2, Rohan Raval 1, Bernardo de Haro Reyes 1, Marek Kucka 3,Frank Yinguang Chan 3 and Jarosław Bryk 1
+
+1-Department of Biology, School of Applied Sciences, University of Huddersfield, Queensgate,Huddersfield, England, United Kingdom 
+
+2-AVIAN Behavioural Genomics and Physiology, IFM Biology (IFM), Linköping University,Linköping, Sweden 
+
+3-Friedrich Meschier Laboratory of the Max Planck Society, Tübingen, Germany 
+
+mlmcerezo@gmail.com, j.bryk@hud.ac.uk
+
+
+### STATISTICAL ANALYSIS
+
+## Loading required packages 
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(here)
+library(ggpubr)
+library(plotly)
+library(ggpubr)
+library(reshape2)
+library(ggplot2)
+library(FSA)
+library(car)
+
+```
+Read data
+
+```{r message=FALSE, warning=FALSE}
+chimeras<-read.csv("Chimeras.txt", sep = "\t")
+head(chimeras)
+
+```
+Here, we calculated the ratio of chimeras for each Multiplexing group. We will have one average value per multiplexing group and experiment (number of mismatches). We are using colunm description that differentiate genuine samples from chimeric sequences
+
+
+
+```{r message=FALSE, warning=FALSE}
+chimeras_percentage<-chimeras %>% 
+group_by(Plate, Multiplexing_group,Mismatches,Description) %>% 
+summarise(sum_counts = sum(Reads)) %>% 
+mutate(Total = sum(sum_counts)) %>% 
+mutate(Ratio = round((sum_counts)/(Total), digits = 4))%>%
+mutate(Percentage=100*(Ratio))%>% 
+filter(Description == "chimera")
+
+chimeras_percentage$Mismatches<-as.factor(chimeras_percentage$Mismatches)
+                                                   
+head(chimeras_percentage)
+
+```
+
+```{r}
+#### DIFFERENCE BY LIBRARY TYPE
+#column for library type
+chimeras_percentage$library_type <- sapply(strsplit(as.character(chimeras_percentage$Plate), split = "-"), `[`, 1)
+#column for library number
+chimeras_percentage$library_no <- sapply(strsplit(as.character(chimeras_percentage$Plate), split = "-"), `[`, 2)
+
+#column for total reads/1000000
+chimeras_percentage$total_k <- chimeras_percentage$Total/1000000
+### Type A libraries
+chimeras_percentage_Seq<-chimeras_percentage[chimeras_percentage$library_type == "Seq",]
+head(chimeras_percentage_Seq)
+
+##the data is proportion data! this is essentially binomial data so the total size of the sample and the number of chimeras_percentage must be provided to a 
+#model if parametric tests are used!!
+
+#view the data
+par(mfrow = c(1,2))
+plot(as.factor(chimeras_percentage_Seq$library_no), chimeras_percentage_Seq$sum_counts)#data is skewed to the lower end of the distribution
+plot(as.factor(chimeras_percentage_Seq$library_no), log(chimeras_percentage_Seq$sum_counts))#log transformation improves the distribution
+#### other transformations were attempted but the distributions and qqplots still had heavy tails. non parametric tests are the best option
+#### for the whole data set!!!!
+
+##non-parametric analysis of variance: Kruskall Wallis test
+#for the ratios
+shapiro.test(log(chimeras_percentage_Seq$Ratio))#distribution is definitely not normal
+kruskal.test(chimeras_percentage_Seq$Ratio ~ as.factor(chimeras_percentage_Seq$library_no))
+dunnTest(chimeras_percentage_Seq$Ratio ~ as.factor(chimeras_percentage_Seq$library_no), altp = T, method = "bonferroni")
+
+#for the percentages gives the same results as for the ratios as the differences are just scaled 100x. 
+kruskal.test(chimeras_percentage_Seq$Percentage ~ as.factor(chimeras_percentage_Seq$library_no))
+dunnTest(chimeras_percentage_Seq$Percentage ~ as.factor(chimeras_percentage_Seq$library_no), altp = T, method = "bonferroni")
+
+kruskal.test(chimeras_percentage_Seq$Ratio ~ as.factor(chimeras_percentage_Seq$Multiplexing_group))
+
+
+###Type B libraries
+chimeras_percentage_Seq_PCR <- chimeras_percentage[chimeras_percentage$library_type == "Seq+PCR",]
+head(chimeras_percentage_Seq_PCR)
+
+hist(chimeras_percentage_Seq_PCR$Ratio)
+hist(log(chimeras_percentage_Seq_PCR$Ratio))
+
+
+shapiro.test(log(chimeras_percentage_Seq_PCR$Ratio))#distribution is definitely not normal eeven when log transformed
+
+#non-parametric test
+kruskal.test(chimeras_percentage_Seq_PCR$Ratio ~ as.factor(chimeras_percentage_Seq_PCR$library_no))
+dunnTest(chimeras_percentage_Seq_PCR$Ratio ~ as.factor(chimeras_percentage_Seq_PCR$library_no), altp = T, method = "bonferroni")
+
+kruskal.test(chimeras_percentage_Seq_PCR$Ratio ~ as.factor(chimeras_percentage_Seq_PCR$Multiplexing_group))
+
+#### full kruskall wallis test across both library types
+kruskal.test(chimeras_percentage$Ratio ~ as.factor(chimeras_percentage$Plate))
+dunnTest(chimeras_percentage$Ratio ~ chimeras_percentage$Plate, altp = T, method = "bonferroni")
+```
+
+
+```{r}
+#### IS THERE A DIFFERENCE BETWEEN LIBRARY TYPE WHEN THE NUMBER OF MISMATCHES ARE THE SAME?? ####
+
+#split df by mismatches but NOT by library type
+m0 <- chimeras_percentage[chimeras_percentage$Mismatches == "0m",]
+m1 <- chimeras_percentage[chimeras_percentage$Mismatches == "1m",]
+m2 <- chimeras_percentage[chimeras_percentage$Mismatches == "2m",]
+m3 <- chimeras_percentage[chimeras_percentage$Mismatches == "3m",]
+m4 <- chimeras_percentage[chimeras_percentage$Mismatches == "4m",]
+mismatches <- list(m0, m1, m2, m3, m4)
+rm(m0, m1, m2, m3, m4)
+
+#data is non normal so a Mann-Whitney U test is needed
+#create vectors of variables to write to
+w <- c()
+p_val <- c()
+
+#perform the mann-whitney U test
+for (i in 1:length(mismatches)) {
+  result <- wilcox.test(mismatches[[i]]$Ratio ~ mismatches[[i]]$library_type)
+  w <- c(w, result$statistic)
+  p_val <- c(p_val, result$p.value)
+}
+
+#create a df to write to
+wilcox_results <- data.frame(Mismatches = c(0:4), W = w, p_val = p_val)
+wilcox_results
+#### IS THERE A CORRELATION BETWEEN THE PROPORTION OF chimeras_percentage AND THE NUMBER OF READS PER MULTIPLEXING GROUP??
+#create vectors to write the output to
+s <- c()
+df <- c()
+p_val <- c()
+confint_0.05 <- c()
+confint_0.95 <- c()
+correlation <- c()
+#write the results of the spearman correlation test to each vector
+for (i in mismatches) {
+  corr <- cor.test(i$Percentage, i$Total, method = "spearman")
+  s <- c(s, corr$statistic)
+  df <- c(df, corr$parameter)
+  p_val <- c(p_val, corr$p.value)
+  correlation <- c(correlation, corr$estimate)
+}
+
+#collate into one df
+#quick power analysis shows that 75 data points are enough for this result
+corr_results_mismatches <- data.frame(mismatches =levels(chimeras_percentage$Mismatches), Rho = correlation, S = s, p_val)
+corr_results_mismatches
+#plot the proportion of chimeras_percentage vs total reads
+ggplot(chimeras_percentage, aes(x = total_k, y = Percentage)) +
+  geom_point() +
+  facet_grid(cols = vars(chimeras_percentage$Mismatches))+#, scales = "free") +
+  xlab(expression(paste("Total number of DNA sequences (10"^"6", ")", sep = ""))) +
+  ylab("Proportion of chimeric sequences (%)") +
+  theme_bw() +
+  theme(axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        axis.text = element_text(size = 10))
+
+ggsave("Figure_6_percent_chimeras_vs_total_sequences.pdf", height = 6, width = 7.5, units = "in")
+
+```
+
+
+
+
+```{r}
+#### IS THERE A DIFFERNCE IN THE VARIANCE BETWEEN THE MIMATCHES FOR % CHIMERIC SEQUENCES?
+#calculate the variances for each mismatch
+tapply(chimeras_percentage$Percentage, INDEX = chimeras_percentage$Mismatches, FUN = var)
+
+# is there a statistical difference?
+# Fishers one way anova assumes homoscedasticity, Welch's anova doesnt. the data definitely isnt normal, but is it homoscedastic?? 
+# http://www.biostathandbook.com/kruskalwallis.html
+# Levene's test for homogeneity of variance
+leveneTest(chimeras_percentage$Percentage, chimeras_percentage$Mismatches) #siginificant p-val indicated heteroscedasticity
+tapply(chimeras_percentage$Percentage, INDEX = chimeras_percentage$Mismatches, FUN = sd) #definitely not equal standard deviations!!!
+tapply(chimeras_percentage$Percentage, INDEX = chimeras_percentage$Mismatches, FUN = var)
+#Fisher's one way anova cannot be used... welch's anova instead?? this does not assume homoscedasticity BUT STILL ASSUMES NORMALITY
+oneway.test(chimeras_percentage$Percentage ~ chimeras_percentage$Mismatches)
+
+#non-paramtetric kruskall-wallis test in case welch's test cannot be used, though not advised if heteroscedastic BUT IF NON NORMAL IT IS THE BEST OPTION
+# http://www.biostathandbook.com/kruskalwallis.html, 
+shapiro.test(chimeras_percentage$Percentage) #data is definitely non-normal
+kruskal.test(chimeras_percentage$Percentage ~ as.factor(chimeras_percentage$Mismatches))
+dunnTest(chimeras_percentage$Percentage ~ as.factor(chimeras_percentage$Mismatches), altp =T, method = "bonferroni")
+
+
+#### CORRELATION OF CHIMERIC SEQUENCES VS TOTAL SEQUENCES ####
+##what pattern do we see? do the cor.test for each library type and per mismatch
+#drop unused levels in the dfs for the two library types
+chimeras_percentage_Seq$Multiplexing_group<-as.factor(chimeras_percentage_Seq$Multiplexing_group)
+chimeras_percentage_Seq$Multiplexing_group<-droplevels(chimeras_percentage_Seq$Multiplexing_group)
+chimeras_percentage_Seq_PCR$Multiplexing_group<-as.factor(chimeras_percentage_Seq_PCR$Multiplexing_group)
+chimeras_percentage_Seq_PCR$Multiplexing_group<-droplevels(chimeras_percentage_Seq_PCR$Multiplexing_group)
+
+#create datafraames subsetted by multuplexing group
+#Type A libraries
+for (i in levels(chimeras_percentage_Seq$Multiplexing_group)){
+  assign(paste0("typeSeq_group_", i), chimeras_percentage_Seq[chimeras_percentage_Seq$Multiplexing_group == i, ])
+}
+#Type B libraries
+for (i in levels(chimeras_percentage_Seq_PCR$Multiplexing_group)){
+  assign(paste0("Seq_PCR_group_", i), chimeras_percentage_Seq_PCR[chimeras_percentage_Seq_PCR$Multiplexing_group == i, ])
+}
+#----------------------------------------------------------------------------------------------------------------------------------------
+#group them into a list for each
+grouped_typeSeq <- list(typeSeq_group_10, typeSeq_group_11, typeSeq_group_A, typeSeq_group_B, typeSeq_group_C, typeSeq_group_D, typeSeq_group_E, typeSeq_group_F, typeSeq_group_G, typeSeq_group_H)
+rm(list = ls(pattern = "typeSeq_group_"))
+
+grouped_Seq_PCR <- list(Seq_PCR_group_RAD_N701_N501, Seq_PCR_group_RAD_N701_N502, Seq_PCR_group_RAD_N701_N503, Seq_PCR_group_RAD_N702_N501, Seq_PCR_group_RAD_N702_N502, 
+                        Seq_PCR_group_RAD_N702_N503, Seq_PCR_group_RAD_N703_N501, Seq_PCR_group_RAD_N703_N502, Seq_PCR_group_RAD_N703_N503, Seq_PCR_group_RAD_N704_N501,
+                        Seq_PCR_group_RAD_N704_N502, Seq_PCR_group_RAD_N704_N503)
+rm(list = ls(pattern = "Seq_PCR_group_"))
+
+#tidy it up a bit
+#for (i in 1:length(grouped_typeSeq)){
+#  grouped_typeSeq[[i]]$Plate <- droplevels(grouped_typeSeq[[i]]$Plate)
+#}
+
+#for (i in 1:length(grouped_Seq_PCR)){
+#  grouped_Seq_PCR[[i]]$Plate <- droplevels(grouped_Seq_PCR[[i]]$Plate)
+#}
+#----------------------------------------------------------------------------------------------------------------------
+##cor.test Type A libraries only by numbere of mismatches
+#create vectors to write the output to
+s <- c()
+df <- c()
+p_val <- c()
+confint_0.05 <- c()
+confint_0.95 <- c()
+correlation <- c()
+Multiplexing_group <- c()
+#loop over typeSeq library data and do a cor.test of proportion of chimeras_percentage vs total number of reads
+for (i in grouped_typeSeq) {
+  corr <- cor.test(i$Percentage, i$Total, method = "spearman")
+  s <- c(s, corr$statistic)
+  # df <- c(df, corr$parameter)
+  p_val <- c(p_val, corr$p.value)
+  correlation <- c(correlation, corr$estimate)
+  Multiplexing_group <- c(Multiplexing_group, levels(droplevels(i$Multiplexing_group)))
+  rm(corr)
+}
+
+#chimeras_percentage$Multiplexing_group<-droplevels(chimeras_percentage$Multiplexing_group)
+#collate into one df
+corr_results_typeSeq_spearman <- data.frame(Multiplexing_group = Multiplexing_group,  s, p_val, correlation)
+corr_results_typeSeq_spearman
+#corr_results_typeSeq_spearman <- data.frame(Multiplexing_group = Multiplexing_group,  t, p_val, correlation)
+
+##cor.test Type B libraries only by number of mismatches
+#create vectors to write the output to
+s <- c()
+df <- c()
+p_val <- c()
+confint_0.05 <- c()
+confint_0.95 <- c()
+correlation <- c()
+Multiplexing_group <- c()
+#loop over typeSeq library data and do a cor.test of proportion of chimeras_percentage vs total number of reads
+for (i in grouped_Seq_PCR) {
+  corr <- cor.test(i$Percentage, i$Total, method = "spearman")
+  s <- c(s, corr$statistic)
+  # df <- c(df, corr$parameter)
+  p_val <- c(p_val, corr$p.value)
+  correlation <- c(correlation, corr$estimate)
+  # confint_0.05 <- c(confint_0.05, corr$conf.int[1])
+  # confint_0.95 <- c(confint_0.95, corr$conf.int[2])
+  Multiplexing_group <- c(Multiplexing_group, levels(droplevels(i$Multiplexing_group)))
+  rm(corr)
+}
+
+#chimeras_percentage$Multiplexing_group <- droplevels(chimeras_percentage$Multiplexing_group)
+#collate into one df
+corr_results_Seq_PCR_spearman <- data.frame(Multiplexing_group = Multiplexing_group,  s, p_val, correlation)
+corr_results_Seq_PCR_spearman
+#corr_results_typeSeq_spearman <- data.frame(Multiplexing_group = Multiplexing_group,  t, p_val, correlation)
+
+
+#### HOW MANY NEW SEQUENCES ADDED WITH EACH INCREMENT IN MISMATCHES ####
+##for each library
+#function to calculate delta
+delta_sequences <- function(x) {
+  difference <- c()
+  for (i in 1:length(x)) {
+    difference[i] <- x[i+1] - x[i]
+  }
+  return(difference)
+} 
+
+#create vectors to write to
+delta_mismatchesI <- c()
+delta_mismatchesII <- c()
+#calculate delta for each multiplexing group in Type A libraries
+for (i in 1:length(grouped_typeSeq)) {
+  delta_mismatchesI[i] <- tapply(grouped_typeSeq[[i]]$Total, grouped_typeSeq[[i]]$Plate, FUN = delta_sequences)
+}
+
+#sum all the deltas for Type A libraries
+delta_mismatchesI_totals <- delta_mismatchesI[[1]] + delta_mismatchesI[[2]] + delta_mismatchesI[[3]] + 
+  delta_mismatchesI[[4]] + delta_mismatchesI[[5]] + delta_mismatchesI[[6]] + delta_mismatchesI[[7]] + 
+  delta_mismatchesI[[8]] + delta_mismatchesI[[9]] + delta_mismatchesI[[10]]
+
+#calculate delta for each multiplexing group in Type B libraries 
+for (i in 1:length(grouped_Seq_PCR)) {
+  delta_mismatchesII[i] <- tapply(grouped_Seq_PCR[[i]]$Total, grouped_Seq_PCR[[i]]$Plate, FUN = delta_sequences)
+}
+#sum all the deltas for Type B libraries
+delta_mismatchesII_totals <- delta_mismatchesII[[1]] + delta_mismatchesII[[2]] + delta_mismatchesII[[3]] + 
+  delta_mismatchesII[[4]] + delta_mismatchesII[[5]] + delta_mismatchesII[[6]] + delta_mismatchesII[[7]] + 
+  delta_mismatchesII[[8]] + delta_mismatchesII[[9]] + delta_mismatchesII[[10]] + delta_mismatchesII[[11]] +
+  delta_mismatchesII[[12]]
+
+#how many more chimeras_percentage are added with each increment in the no. of mismatches?
+delta_chimeras_percentageI <- c()
+delta_chimeras_percentageII <- c()
+
+for (i in 1:length(grouped_typeSeq)) {
+  delta_chimeras_percentageI[i] <- tapply(grouped_typeSeq[[i]]$sum_counts, grouped_typeSeq[[i]]$Plate, FUN = delta_sequences)
+}
+
+for (i in 1:length(grouped_Seq_PCR)) {
+  delta_chimeras_percentageII[i] <- tapply(grouped_Seq_PCR[[i]]$sum_counts, grouped_Seq_PCR[[i]]$Plate, FUN = delta_sequences)
+}
+
+#sum all the chimera deltas for TupeI libraries
+delta_chimeras_percentageI_totals <- delta_chimeras_percentageI[[1]] + delta_chimeras_percentageI[[2]] + delta_chimeras_percentageI[[3]] + 
+  delta_chimeras_percentageI[[4]] + delta_chimeras_percentageI[[5]] + delta_chimeras_percentageI[[6]] + delta_chimeras_percentageI[[7]] + 
+  delta_chimeras_percentageI[[8]] + delta_chimeras_percentageI[[9]] + delta_chimeras_percentageI[[10]]
+
+#sum all the chimera deltas for Type B libraries
+delta_chimeras_percentageII_totals <- delta_chimeras_percentageII[[1]] + delta_chimeras_percentageII[[2]] + delta_chimeras_percentageII[[3]] + 
+  delta_chimeras_percentageII[[4]] + delta_chimeras_percentageII[[5]] + delta_chimeras_percentageII[[6]] + delta_chimeras_percentageII[[7]] + 
+  delta_chimeras_percentageII[[8]] + delta_chimeras_percentageII[[9]] + delta_chimeras_percentageII[[10]] + delta_chimeras_percentageII[[11]] +
+  delta_chimeras_percentageII[[12]]
+
+#make a df of the delta data
+mis <- rep(c("0/1", "1/2", "2/3", "3/4"), 4)
+library <- rep(c(rep("Type A", 4), rep("Type B", 4)),2)
+sequences <- c(rep("Total new reads", 8), rep("chimeras_percentage", 8))
+deltas <- data.frame(mismatches = mis, library = library, sequence_type = sequences, 
+                     delta = c(delta_mismatchesI_totals[1:4], delta_mismatchesII_totals[1:4], 
+                               delta_chimeras_percentageI_totals[1:4], delta_chimeras_percentageII_totals[1:4]))
+deltas$delta_k <- deltas$delta/1000000
+
+#plot the data
+ggplot(data = deltas, aes(x = mismatches, y = delta_k, colour = library, linetype = sequence_type)) + 
+  geom_line(data = deltas[1:4,], aes(group = library, colour = "Type A")) +
+  geom_point(data = deltas[1:4,], aes(group = library, colour = "Type A")) +
+  geom_line(data = deltas[5:8,], aes(group = library, colour = "Type B")) +
+  geom_point(data = deltas[5:8,], aes(group = library, colour = "Type B")) +
+  geom_line(data = deltas[9:12,], aes(group = library, colour = "Type A")) +
+  geom_point(data = deltas[9:12,], aes(group = library, colour = "Type A")) +
+  geom_line(data = deltas[13:16,], aes(group = library, colour = "Type B")) +
+  geom_point(data = deltas[13:16,], aes(group = library, colour = "Type B")) +
+  labs(colour = "Library type", linetype = "Sequence type") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12, face = "bold")) +
+  # legend.box = "horizontal",
+  # legend.position = "bottom") +
+  # scale_color_discrete(guide = guide_legend(title.position = "top")) +
+  # scale_linetype_discrete(guide = guide_legend(title.position = "top")) +
+  # panel.grid.major.y = element_line(colour = "grey"),
+  # panel.grid.minor = element_blank(),
+  # axis.line = element_line(colour = "black"),
+  # panel.background = element_blank()) +
+  ylab(expression(paste("Number of new sequences (10"^"6", ")", sep = ""))) +
+  xlab("Iterations in the number of mismatches")+
+  scale_colour_grey(start = 0.01,end = 0.5)+
+  scale_linetype_discrete(labels=c("Total chimeras", "Total new reads"))
+
+
+ggsave("Figure_7_delta_values_2.pdf", width = 6.5, height = 6.5, units = "in")
+```
+
+
