@@ -1,7 +1,7 @@
 
 This folder contains the data and scripts used in "Identification and quantification of chimeric sequencing reads in a highly multiplexed RAD-seq protocol" 
 
-Maria Luisa Martin Cerezo 1,2, Rohan Raval 1, Bernardo de Haro Reyes 1, Marek Kucka 3,Frank Yinguang Chan 3 and Jarosław Bryk 1
+Maria Luisa Martin Cerezo 1,2, Rohan Raval 1, Bernardo de Haro Reyes 1, Marek Kucka 3,Yinguang Frank Chan 3 and Jarosław Bryk 1
 
 1-Department of Biology, School of Applied Sciences, University of Huddersfield, Queensgate, Huddersfield, England, United Kingdom 
 
